@@ -1,6 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
-<fragment xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/map"
-    android:name="com.google.android.gms.maps.SupportMapFragment"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent" />
+    android:layout_height="match_parent">
+
+    <fragment
+        android:id="@+id/map"
+        android:name="com.google.android.gms.maps.SupportMapFragment"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:background="#CCFFFFFF"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/dangerScoreText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Danger Score: 0%"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/detectorDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Loading sensors..."
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button android:id="@+id/btnRed" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="RED" android:backgroundTint="#FF0000"/>
+            <Button android:id="@+id/btnYellow" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="YELLOW" android:backgroundTint="#FFEB3B" android:textColor="#000000"/>
+            <Button android:id="@+id/btnGreen" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="GREEN" android:backgroundTint="#4CAF50"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/sosOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#EEFF0000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="DANGER DETECTED!"
+            android:textColor="#FFFFFF"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/countdownText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="10"
+            android:textColor="#FFFFFF"
+            android:textSize="80sp" />
+
+        <Button
+            android:id="@+id/btnCancelSOS"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="I AM SAFE (CANCEL)"
+            android:padding="20dp" />
+    </LinearLayout>
+</RelativeLayout>
