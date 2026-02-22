@@ -7,7 +7,6 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.media.AudioManager;
 import android.media.MediaRecorder;
 import android.os.*;
 import android.telephony.SmsManager;
@@ -49,12 +48,16 @@ public class MainActivity extends AppCompatActivity
     // ---------------- 🎤 SCREAM DETECTION ----------------
     private MediaRecorder recorder;
     private boolean isScreaming = false;
+
+    private int noiseFloor = 0;
     private int screamCounter = 0;
+    private long screamStartTime = 0;
+    private long lastScreamTime = 0;
 
-    private static final int SCREAM_THRESHOLD = 7000;
-    private static final int SCREAM_REQUIRED_COUNT = 3;
-
-    private int avgAmplitude = 0;
+    private static final int SCREAM_SPIKE_DELTA = 9000;
+    private static final int SCREAM_REQUIRED_COUNT = 4;
+    private static final long MIN_SCREAM_DURATION_MS = 600;
+    private static final long SCREAM_COOLDOWN_MS = 3000;
 
     // ---------------- TIME & OVERRIDES ----------------
     private boolean isNight = false;
@@ -97,7 +100,6 @@ public class MainActivity extends AppCompatActivity
     protected void onResume() {
         super.onResume();
 
-        // ✅ SAFE PLACE TO START AUDIO
         if (ContextCompat.checkSelfPermission(this,
                 Manifest.permission.RECORD_AUDIO)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -165,38 +167,52 @@ public class MainActivity extends AppCompatActivity
             recorder.setOutputFile(audioFile.getAbsolutePath());
 
             recorder.prepare();
-            recorder.start(); // ✅ WILL NOT FAIL NOW
+            recorder.start();
 
-            handler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (recorder != null && !isCooldownActive && !isSOSActive) {
-
-                        int amp = recorder.getMaxAmplitude();
-                        if (amp > 0) {
-                            avgAmplitude = (avgAmplitude + amp) / 2;
-
-                            Log.d("SCREAM", "amp=" + amp + " avg=" + avgAmplitude);
-
-                            if (avgAmplitude > SCREAM_THRESHOLD) {
-                                screamCounter++;
-                                if (screamCounter >= SCREAM_REQUIRED_COUNT) {
-                                    isScreaming = true;
-                                }
-                            } else {
-                                screamCounter = 0;
-                                isScreaming = false;
-                            }
-                        }
-                    }
-                    handler.postDelayed(this, 400);
-                }
-            }, 400);
+            handler.postDelayed(this::monitorScream, 300);
 
         } catch (Exception e) {
             Log.e("SCREAM_ERROR", "Failed to start scream detection", e);
             stopScreamDetection();
         }
+    }
+
+    private void monitorScream() {
+        if (recorder == null || isCooldownActive || isSOSActive) return;
+
+        int amp = recorder.getMaxAmplitude();
+        long now = System.currentTimeMillis();
+
+        // 🔹 Noise floor calibration
+        if (noiseFloor == 0) {
+            noiseFloor = amp;
+            handler.postDelayed(this::monitorScream, 300);
+            return;
+        }
+
+        int delta = amp - noiseFloor;
+
+        Log.d("SCREAM", "amp=" + amp + " base=" + noiseFloor + " delta=" + delta);
+
+        if (delta > SCREAM_SPIKE_DELTA && now - lastScreamTime > SCREAM_COOLDOWN_MS) {
+
+            if (screamStartTime == 0) screamStartTime = now;
+            screamCounter++;
+
+            if (screamCounter >= SCREAM_REQUIRED_COUNT &&
+                    now - screamStartTime >= MIN_SCREAM_DURATION_MS) {
+
+                isScreaming = true;
+                lastScreamTime = now;
+            }
+
+        } else {
+            screamCounter = 0;
+            screamStartTime = 0;
+            isScreaming = false;
+        }
+
+        handler.postDelayed(this::monitorScream, 300);
     }
 
     private void stopScreamDetection() {
