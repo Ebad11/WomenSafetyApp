@@ -9,6 +9,16 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.MediaRecorder;
 import android.os.*;
+import org.tensorflow.lite.task.audio.classifier.AudioClassifier;
+import org.tensorflow.lite.task.audio.classifier.Classifications;
+import org.tensorflow.lite.support.label.Category;
+import org.tensorflow.lite.support.audio.TensorAudio;
+import android.media.AudioRecord;
+import java.util.List;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import android.graphics.Color;
+import android.location.Location;
 import android.telephony.SmsManager;
 import android.util.Log;
 import android.view.View;
@@ -37,6 +47,7 @@ public class MainActivity extends AppCompatActivity
     // ---------------- MAP & LOCATION ----------------
     private GoogleMap mMap;
     private FusedLocationProviderClient fusedLocationClient;
+    private Circle zoneCircle;
 
     // ---------------- ZONE ----------------
     private String currentZoneType = "Green";
@@ -45,19 +56,14 @@ public class MainActivity extends AppCompatActivity
     private SensorManager sensorManager;
     private boolean isRunning = false;
 
-    // ---------------- 🎤 SCREAM DETECTION ----------------
-    private MediaRecorder recorder;
+    // ---------------- 🎤 YAMNET SCREAM DETECTION ----------------
+    private AudioClassifier audioClassifier;
+    private TensorAudio tensorAudio;
+    private AudioRecord audioRecord;
+    private ScheduledThreadPoolExecutor executor;
     private boolean isScreaming = false;
-
-    private int noiseFloor = 0;
-    private int screamCounter = 0;
-    private long screamStartTime = 0;
     private long lastScreamTime = 0;
-
-    private static final int SCREAM_SPIKE_DELTA = 9000;
-    private static final int SCREAM_REQUIRED_COUNT = 4;
-    private static final long MIN_SCREAM_DURATION_MS = 600;
-    private static final long SCREAM_COOLDOWN_MS = 3000;
+    private String currentDetectedSound = "None";
 
     // ---------------- TIME & OVERRIDES ----------------
     private boolean isNight = false;
@@ -151,76 +157,74 @@ public class MainActivity extends AppCompatActivity
         );
     }
 
-    // ================= 🎤 SCREAM DETECTION =================
+    // ================= 🎤 YAMNET AUDIO CLASSIFICATION =================
 
     private void startScreamDetection() {
-
-        if (recorder != null) return;
+        if (audioClassifier != null) return;
 
         try {
-            recorder = new MediaRecorder();
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+            audioClassifier = AudioClassifier.createFromFile(this, "yamnet.tflite");
+            tensorAudio = audioClassifier.createInputTensorAudio();
+            audioRecord = audioClassifier.createAudioRecord();
+            audioRecord.startRecording();
 
-            File audioFile = new File(getCacheDir(), "scream_temp.3gp");
-            recorder.setOutputFile(audioFile.getAbsolutePath());
-
-            recorder.prepare();
-            recorder.start();
-
-            handler.postDelayed(this::monitorScream, 300);
-
+            executor = new ScheduledThreadPoolExecutor(1);
+            executor.scheduleAtFixedRate(this::classifyAudio, 0, 500, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
-            Log.e("SCREAM_ERROR", "Failed to start scream detection", e);
+            Log.e("YAMNET_ERROR", "Failed to start audio classifier", e);
             stopScreamDetection();
         }
     }
 
-    private void monitorScream() {
-        if (recorder == null || isCooldownActive || isSOSActive) return;
+    private void classifyAudio() {
+        if (audioRecord == null || audioClassifier == null || isCooldownActive || isSOSActive) return;
 
-        int amp = recorder.getMaxAmplitude();
-        long now = System.currentTimeMillis();
+        tensorAudio.load(audioRecord);
+        List<Classifications> output = audioClassifier.classify(tensorAudio);
 
-        // 🔹 Noise floor calibration
-        if (noiseFloor == 0) {
-            noiseFloor = amp;
-            handler.postDelayed(this::monitorScream, 300);
-            return;
-        }
+        boolean screamDetectedNow = false;
 
-        int delta = amp - noiseFloor;
+        if (!output.isEmpty() && output.get(0).getCategories() != null && !output.get(0).getCategories().isEmpty()) {
+            Category topCategory = output.get(0).getCategories().get(0);
+            currentDetectedSound = topCategory.getLabel();
 
-        Log.d("SCREAM", "amp=" + amp + " base=" + noiseFloor + " delta=" + delta);
-
-        if (delta > SCREAM_SPIKE_DELTA && now - lastScreamTime > SCREAM_COOLDOWN_MS) {
-
-            if (screamStartTime == 0) screamStartTime = now;
-            screamCounter++;
-
-            if (screamCounter >= SCREAM_REQUIRED_COUNT &&
-                    now - screamStartTime >= MIN_SCREAM_DURATION_MS) {
-
-                isScreaming = true;
-                lastScreamTime = now;
+            for (Category category : output.get(0).getCategories()) {
+                if (category.getScore() > 0.3f) {
+                    String label = category.getLabel().toLowerCase();
+                    if (label.contains("scream") || label.contains("yell") || label.contains("shriek")) {
+                        screamDetectedNow = true;
+                        Log.d("YAMNET", "Scream detected! " + label + " : " + category.getScore());
+                        
+                        final String match = category.getLabel();
+                        handler.post(() -> Toast.makeText(MainActivity.this, "YAMNET: " + match, Toast.LENGTH_SHORT).show());
+                        break;
+                    }
+                }
             }
-
-        } else {
-            screamCounter = 0;
-            screamStartTime = 0;
-            isScreaming = false;
         }
 
-        handler.postDelayed(this::monitorScream, 300);
+        if (screamDetectedNow) {
+            isScreaming = true;
+            lastScreamTime = System.currentTimeMillis();
+        } else {
+            isScreaming = false; 
+        }
     }
 
     private void stopScreamDetection() {
         try {
-            if (recorder != null) {
-                recorder.stop();
-                recorder.release();
-                recorder = null;
+            if (executor != null) {
+                executor.shutdownNow();
+                executor = null;
+            }
+            if (audioRecord != null) {
+                audioRecord.stop();
+                audioRecord.release();
+                audioRecord = null;
+            }
+            if (audioClassifier != null) {
+                audioClassifier.close();
+                audioClassifier = null;
             }
         } catch (Exception ignored) {}
     }
@@ -232,10 +236,44 @@ public class MainActivity extends AppCompatActivity
             @Override
             public void run() {
                 checkTime();
+                updateMapZoneCircle();
                 calculateDangerScore();
                 handler.postDelayed(this, 300);
             }
         }, 300);
+    }
+
+    private void updateMapZoneCircle() {
+        if (mMap == null) return;
+        
+        try {
+            Location loc = mMap.getMyLocation();
+            if (loc == null) return;
+
+            LatLng currentLatLng = new LatLng(loc.getLatitude(), loc.getLongitude());
+
+            int color;
+            switch (currentZoneType) {
+                case "Red": color = Color.argb(64, 255, 0, 0); break;
+                case "Yellow": color = Color.argb(64, 255, 255, 0); break;
+                default: color = Color.argb(64, 0, 255, 0); break;
+            }
+
+            if (zoneCircle == null) {
+                zoneCircle = mMap.addCircle(new CircleOptions()
+                        .center(currentLatLng)
+                        .radius(500)
+                        .strokeWidth(2)
+                        .strokeColor(color)
+                        .fillColor(color));
+            } else {
+                zoneCircle.setCenter(currentLatLng);
+                zoneCircle.setFillColor(color);
+                zoneCircle.setStrokeColor(color);
+            }
+        } catch (SecurityException e) {
+            // Location permission not granted yet
+        }
     }
 
     // ================= SCORE =================
@@ -250,14 +288,17 @@ public class MainActivity extends AppCompatActivity
 
         if (isNight) score += 10;
         if (isRunning) score += 10;
-        if (assumeScream || isScreaming) score += 20;
+        
+        boolean recentScream = isScreaming || (System.currentTimeMillis() - lastScreamTime < 5000);
+        
+        if (assumeScream || recentScream) score += 20;
 
         dangerScoreText.setText("Danger Score: " + score + "%");
         runStatusText.setText(isRunning ? "🏃 RUNNING DETECTED" : "🏃 Not running");
         screamStatusText.setText(
-                (assumeScream || isScreaming) ? "🎤 SCREAM DETECTED" : "🎤 No scream");
+                (assumeScream || recentScream) ? "🎤 YAMNET SCREAM DETECTED" : "🎤 No scream");
 
-        detectorDetails.setText("Zone: " + currentZoneType + " | Night: " + isNight);
+        detectorDetails.setText("Zone: " + currentZoneType + " | Night: " + isNight + "\nSound: " + currentDetectedSound);
 
         if (score >= 70) triggerSOS();
     }
